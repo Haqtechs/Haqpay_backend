@@ -1,50 +1,63 @@
 // index.js
 const express = require('express');
 const bodyParser = require('body-parser');
+const { Pool } = require('pg'); // PostgreSQL
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Use body-parser to parse JSON requests
 app.use(bodyParser.json());
 
-// In-memory "database" for demo purposes
-let users = [];
+// Connect to PostgreSQL using your DATABASE_URL
+const pool = new Pool({
+    connectionString: process.env.DATABASE_URL,
+    ssl: { rejectUnauthorized: false } // needed for Render
+});
+
+// Create users table if it doesn't exist
+pool.query(`
+CREATE TABLE IF NOT EXISTS users (
+    id SERIAL PRIMARY KEY,
+    username VARCHAR(100) UNIQUE NOT NULL,
+    password VARCHAR(100) NOT NULL
+);
+`).catch(err => console.error(err));
 
 // Signup endpoint
-app.post('/signup', (req, res) => {
+app.post('/signup', async (req, res) => {
     const { username, password } = req.body;
-    if (!username || !password) {
-        return res.status(400).json({ message: "Username and password are required." });
-    }
+    if (!username || !password) return res.status(400).json({ message: "Username and password required." });
 
-    // Check if user already exists
-    const existingUser = users.find(u => u.username === username);
-    if (existingUser) {
-        return res.status(400).json({ message: "User already exists." });
+    try {
+        const result = await pool.query(
+            "INSERT INTO users (username, password) VALUES ($1, $2) RETURNING *",
+            [username, password]
+        );
+        res.status(201).json({ message: "Signup successful!", user: result.rows[0] });
+    } catch (err) {
+        if (err.code === '23505') res.status(400).json({ message: "User already exists." });
+        else res.status(500).json({ message: "Server error." });
     }
-
-    // Save user
-    users.push({ username, password });
-    return res.status(201).json({ message: "Signup successful!" });
 });
 
 // Login endpoint
-app.post('/login', (req, res) => {
+app.post('/login', async (req, res) => {
     const { username, password } = req.body;
-    const user = users.find(u => u.username === username && u.password === password);
-    if (!user) {
-        return res.status(401).json({ message: "Invalid username or password." });
+    try {
+        const result = await pool.query(
+            "SELECT * FROM users WHERE username=$1 AND password=$2",
+            [username, password]
+        );
+        if (result.rows.length === 0) res.status(401).json({ message: "Invalid username or password." });
+        else res.status(200).json({ message: "Login successful!", user: result.rows[0] });
+    } catch (err) {
+        res.status(500).json({ message: "Server error." });
     }
-
-    return res.status(200).json({ message: "Login successful!" });
 });
 
-// Homepage endpoint
+// Homepage
 app.get('/home', (req, res) => {
-    return res.status(200).json({ message: "Welcome to HaqPay homepage!" });
+    res.status(200).json({ message: "Welcome to HaqPay homepage!" });
 });
 
 // Start server
-app.listen(PORT, () => {
-    console.log(`Server running on port ${PORT}`);
-});
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
